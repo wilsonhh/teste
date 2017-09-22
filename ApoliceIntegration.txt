@@ -1,0 +1,89 @@
+package com.porto.corporativo.licitacoes.integration;
+
+import java.io.IOException;
+import java.io.UnsupportedEncodingException;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
+import java.util.Map;
+
+import javax.ejb.Stateless;
+
+import org.apache.commons.lang.StringUtils;
+import org.apache.http.client.HttpResponseException;
+
+import com.fasterxml.jackson.core.JsonParseException;
+import com.fasterxml.jackson.databind.JsonMappingException;
+import com.porto.corporativo.licitacoes.constant.Constantes;
+import com.porto.corporativo.licitacoes.integration.domain.DocumentoResponse;
+import com.porto.corporativo.licitacoes.integration.interfaces.ApoliceLicitarIntegratorLocal;
+import com.porto.corporativo.licitacoes.rest.exception.WebServiceCallerException;
+import com.porto.corporativo.licitacoes.util.ParserUtil;
+import com.porto.corporativo.licitacoes.util.WebServiceCaller;
+
+/**
+ * The Class ValidarSusepsIntegration.
+ */
+@Stateless
+public class ApoliceLicitarIntegration implements ApoliceLicitarIntegratorLocal {
+
+	private static final String POST = "POST";
+	private static final String VARIAVEL_SUSEP = "{{susep}}";
+	private static final String VARIAVEL_PROPOSTA = "{{proposta}}";
+	private static final String VARIAVEL_SUCURSAL = "{{sucursal}}";
+	private static final String VARIAVEL_CNPJ = "{{cnpj}}";
+	private static final String VARIAVEL_DATA_PROPOSTA = "{{dataProposta}}";
+	private static final String VARIAVEL_APOLICE = "{{apolice}}";
+	private static final String VARIAVEL_RAMO = "{{ramo}}";
+	private static final String REQUEST_VALIDAR_APOLICE = "<soapenv:Envelope "
+			+ "xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" "
+			+ "xmlns:cus=\"http://siebel.com/CustomUI\">" + "<soapenv:Header/>"
+			+ "<soapenv:Body>" + "<cus:PSValidarApoliceWS_Input>"
+			+ "<cus:Susep>{{susep}}</cus:Susep>"
+			+ "<cus:Proposta>{{proposta}}</cus:Proposta>"
+			+ "<cus:Sucursal>{{sucursal}}</cus:Sucursal>"
+			+ "<cus:CNPJ>{{cnpj}}</cus:CNPJ>"
+			+ "<cus:DataProposta>{{dataProposta}}</cus:DataProposta>"
+			+ "<cus:Apolice>{{apolice}}</cus:Apolice>"
+			+ "<cus:Ramo>{{ramo}}</cus:Ramo>"
+			+ "</cus:PSValidarApoliceWS_Input>" + "</soapenv:Body>"
+			+ "</soapenv:Envelope>";
+	private static final String LISTA_APOLICE_PATTERN = "<ListaDocumentos.*?>(.*)</ListaDocumentos>";
+
+	@Override
+	public DocumentoResponse buscarApolice(String sucursal, String apolice,
+			String ramo) throws HttpResponseException,
+			WebServiceCallerException, UnsupportedEncodingException,
+			JsonParseException, JsonMappingException, IOException {
+		DocumentoResponse documentoResponse = null;
+
+		if (StringUtils.isNotEmpty(apolice) && StringUtils.isNotEmpty(sucursal)
+				&& StringUtils.isNotEmpty(ramo)) {
+			final Map<String, String> additionalHeaders = new HashMap<>();
+
+			final String request = REQUEST_VALIDAR_APOLICE
+					.replace(VARIAVEL_SUSEP, "")
+					.replace(VARIAVEL_PROPOSTA, "")
+					.replace(VARIAVEL_SUCURSAL, sucursal)
+					.replace(VARIAVEL_CNPJ, "")
+					.replace(VARIAVEL_DATA_PROPOSTA, "")
+					.replace(VARIAVEL_APOLICE, apolice)
+					.replace(VARIAVEL_RAMO, ramo);
+
+			String response = WebServiceCaller.chamaWebService(
+					Constantes.VALIDAR_APOLICE_ENDPOINT, request,
+					additionalHeaders, POST,
+					Constantes.VALIDAR_APOLICE_USUARIO,
+					Constantes.VALIDAR_APOLICE_SENHA,
+					StandardCharsets.UTF_8);
+
+			response = ParserUtil.formatarResponse(response,
+					LISTA_APOLICE_PATTERN);
+
+			documentoResponse = ParserUtil.converterXMLFormatado(response,
+					DocumentoResponse.class);
+		}
+
+		return documentoResponse;
+	}
+
+}

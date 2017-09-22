@@ -1,0 +1,275 @@
+package com.porto.corporativo.licitacoes.util;
+
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
+import java.security.KeyManagementException;
+import java.security.NoSuchAlgorithmException;
+import java.security.cert.X509Certificate;
+import java.util.Map;
+
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
+import org.apache.http.client.HttpResponseException;
+
+import com.porto.corporativo.licitacoes.rest.exception.WebServiceCallerException;
+import com.porto.infra.util.LogManager;
+import com.porto.security.cryptography.Cryptography;
+import com.porto.security.cryptography.CryptographyException;
+
+/**
+ * Classe responsável por chamar webservices Soap a partir da api httpclient.
+ * 
+ * @author F0103972
+ * @version 1.0
+ * @since Jan 5, 2017 8:48:27 AM 
+ */
+@TimeMeasurementLimiter
+public final class WebServiceCaller {
+
+	private static final String PROBLEMA_AO_DESCRIPTOGRAFAR = "Problema ao descriptografar";
+
+	private static final int ACCEPTED = 202;
+
+	/** The Constant HTTPS. */
+	private static final String HTTPS = "https";
+
+	/** The Constant LOGGER. */
+	private static final LogManager LOGGER = LogManager.getLog(WebServiceCaller.class);
+
+	/** The Constant PROBLEMA_EM_CRIAR_CONEXAO_HTTP. */
+	private static final String PROBLEMA_EM_CRIAR_CONEXAO_HTTP = "Problema ao criar a conexao http";
+
+	/**
+	 * Instantiates a new web service caller.
+	 */
+	private WebServiceCaller() {
+		super();
+	}
+
+	/**
+	 * Metodo responsável por chamar o webservice de integração do sistema.
+	 *
+	 * @author F0103972
+	 * @param stringUrl the string url
+	 * @param data the data
+	 * @param additionalHeaders the additional headers
+	 * @param requestMethod the request method
+	 * @param username the username
+	 * @param password the password
+	 * @return the string
+	 * @throws WebServiceCallerException the web service caller exception
+	 * @throws HttpResponseException the http response exception
+	 */
+	public static String chamaWebService(final String stringUrl,
+			final String data,
+			final Map<String, String> additionalHeaders,
+			final String requestMethod,
+			final String username,
+			final String password,
+			final Charset charset) throws WebServiceCallerException, HttpResponseException {
+
+		final long tempoInicial = System.currentTimeMillis();
+		LOGGER.info("ENDPOINT: " +stringUrl);
+		LOGGER.info("REQUEST: " +data);
+		
+		final StringBuilder sb = new StringBuilder();
+		HttpURLConnection httpConn = null;
+
+		try {
+			final URL url = new URL(stringUrl);
+			httpConn = obterHttpConn(url);
+			
+			
+			final ByteArrayOutputStream bout = new ByteArrayOutputStream();
+
+			byte[] buffer;
+			buffer = data.getBytes("UTF-8");
+			bout.write(buffer);
+			final byte[] b = bout.toByteArray();
+
+			httpConn.setRequestProperty("Content-Length", String.valueOf(b.length));
+
+			if (additionalHeaders != null) {
+				for (final Map.Entry<String, String> entry : additionalHeaders.entrySet()) {
+					httpConn.setRequestProperty(entry.getKey(), entry.getValue());
+				}
+			}
+
+			httpConn.setRequestMethod(requestMethod);
+			if (username.isEmpty() == Boolean.FALSE.booleanValue()
+					&& password.isEmpty() == Boolean.FALSE.booleanValue()) {
+				
+				final String passwordDecrypted = Cryptography.decrypt(password);
+				
+				final sun.misc.BASE64Encoder enc = new sun.misc.BASE64Encoder();
+				final String userpassword = username + ":" + passwordDecrypted;
+				final String encodedAuthorization = enc.encode(userpassword.getBytes());
+				httpConn.setRequestProperty("Authorization", "Basic " + encodedAuthorization);
+
+			}
+			httpConn.setDoOutput(true); 
+			httpConn.setDoInput(true);
+			httpConn.setUseCaches(false);
+			httpConn.setDefaultUseCaches(false);
+			final OutputStream out = httpConn.getOutputStream();
+			out.write(b);
+			out.close();
+
+			if (httpConn.getResponseCode() > ACCEPTED) {
+				if (httpConn.getErrorStream() != null) {
+					obterResponseString(httpConn, sb, true, charset);
+				}
+				throw new HttpResponseException(httpConn.getResponseCode(), sb.toString());
+			} else {
+				obterResponseString(httpConn, sb, false, charset);
+			}
+		} catch (HttpResponseException e) {
+			throw e;
+			
+		} catch (KeyManagementException | NoSuchAlgorithmException | IOException e) {
+			LOGGER.error(PROBLEMA_EM_CRIAR_CONEXAO_HTTP, e);
+			throw new WebServiceCallerException(PROBLEMA_EM_CRIAR_CONEXAO_HTTP, e);
+		} catch (CryptographyException e) {
+			LOGGER.error(PROBLEMA_AO_DESCRIPTOGRAFAR, e);
+			throw new WebServiceCallerException(PROBLEMA_AO_DESCRIPTOGRAFAR, e);
+		} finally {
+			httpConn.disconnect();
+		}
+		
+		LOGGER.info("RESPONSE: " +sb.toString());
+		LOGGER.info("[chamaWebService] O método executou em " + (System.currentTimeMillis() - tempoInicial));
+		
+		return sb.toString();
+		
+	}
+	
+	/**
+	 * Metodo responsável por obter a conexão http do endpoint webservice.
+	 * 
+	 * @author F0103972
+	 * @param url
+	 *            - EndPoint do webservice.
+	 * @return the http url connection
+	 * @throws KeyManagementException
+	 *             the key management exception
+	 * @throws NoSuchAlgorithmException
+	 *             the no such algorithm exception
+	 * @throws IOException
+	 *             Signals that an I/O exception has occurred.
+	 * @since Jan 5, 2017 9:09:56 AM
+	 */
+	private static HttpURLConnection obterHttpConn(final URL url) throws KeyManagementException,
+			NoSuchAlgorithmException, IOException {
+		HttpURLConnection httpConn;
+		if (url.getProtocol().equalsIgnoreCase(HTTPS)) {
+			addTrustAllCerts();
+			httpConn = (HttpsURLConnection) url.openConnection();
+		} else {
+			httpConn = (HttpURLConnection) url.openConnection();
+		}
+		return httpConn;
+	}
+
+	/**
+	 * Metodo responsável por o response do serviço webservice chamado.
+	 * 
+	 * @author F0103972
+	 * @param httpConn
+	 *            the http conn
+	 * @param sb
+	 *            the sb
+	 * @param error
+	 *            - Parametro que diz para obter getErrorStream() ou não.
+	 * @throws IOException
+	 *             Signals that an I/O exception has occurred.
+	 * @since Jan 5, 2017 9:13:58 AM
+	 */
+	private static void obterResponseString(
+			final HttpURLConnection httpConn,
+			final StringBuilder sb,
+			final boolean error,
+			final Charset charset) throws IOException {
+
+		final InputStream inStream = error == Boolean.TRUE.booleanValue() ? httpConn.getErrorStream() : httpConn
+				.getInputStream();
+		final InputStreamReader isr = new InputStreamReader(inStream, charset);
+		final BufferedReader in = new BufferedReader(isr);
+		String responseString;
+		while ((responseString = in.readLine()) != null) {
+			sb.append(responseString);
+		}
+		in.close();
+	}
+
+	/**
+	 * Metodo responsável por adicionar o certificado na requisição https.
+	 * 
+	 * @author F0103972
+	 * @throws NoSuchAlgorithmException
+	 *             the no such algorithm exception
+	 * @throws KeyManagementException
+	 *             the key management exception
+	 * @since Jan 5, 2017 9:25:15 AM
+	 */
+	private static void addTrustAllCerts() throws NoSuchAlgorithmException, KeyManagementException {
+		final TrustManager[] trustAllCerts = new TrustManager[] { new X509TrustManager() {
+			@Override
+			public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+				return null;
+			}
+
+			@Override
+			public void checkClientTrusted(final X509Certificate[] certs, final String authType) {
+			}
+
+			@Override
+			public void checkServerTrusted(final X509Certificate[] certs, final String authType) {
+			}
+		} };
+		SSLContext sc;
+		sc = SSLContext.getInstance("SSL");
+		sc.init(null, trustAllCerts, new java.security.SecureRandom());
+		HttpsURLConnection.setDefaultSSLSocketFactory(sc.getSocketFactory());
+		// Create all-trusting host name verifier
+		final HostnameVerifier allHostsValid = new HostnameVerifier() {
+			@Override
+			public boolean verify(final String hostname, final SSLSession session) {
+				return true;
+			}
+		};
+		// Install the all-trusting host verifier
+		HttpsURLConnection.setDefaultHostnameVerifier(allHostsValid);
+	}
+
+	/**
+	 * Chama web service.
+	 *
+	 * @param stringUrl the string url
+	 * @param data the data
+	 * @param additionalHeaders the additional headers
+	 * @param requestMethod the request method
+	 * @return the string
+	 * @throws WebServiceCallerException the web service caller exception
+	 * @throws HttpResponseException the http response exception
+	 */
+	public static String chamaWebService(final String stringUrl, final String data,
+			final Map<String, String> additionalHeaders, final String requestMethod) throws WebServiceCallerException,
+			HttpResponseException {
+		return WebServiceCaller.chamaWebService(stringUrl, data, additionalHeaders, requestMethod, "", "", StandardCharsets.UTF_8);
+	}
+	
+	
+}
